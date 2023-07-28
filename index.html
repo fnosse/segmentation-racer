@@ -1,0 +1,123 @@
+<!doctype html>
+
+<html>
+  <head>
+    <meta charset="utf-8">
+    <link rel="icon" href="data:,">
+    <title>Segmentation racer!</title>
+  </head>
+
+  <body>
+    <textarea id="text_input" style="width:100%" rows="30" spellcheck="false"></textarea><br>
+    <input type="button" style="width:100%" value="Segment!" onclick="segment()"/><br>
+    <p id="status"></p><br>
+    <table id="output_table" style="border:1px solid;width:100%"></table>
+    <script type="module">
+    function insertTableCell(value, index) {
+        let table = document.getElementById("output_table");
+        if (table.rows.length <= index) {
+            table.insertRow();
+        }
+        let cell = table.rows[index].insertCell();
+        cell.innerHTML = "<samp>" + value + "</samp>";
+        cell.style.border = "1px solid";
+    }
+
+    const decodeString = (pointer, length) => {
+      const slice = new Uint8Array(
+        memory.buffer,
+        pointer,
+        length
+      )
+      return new TextDecoder().decode(slice)
+    }
+
+    const encodeString = (string) => {
+        const buffer = new TextEncoder().encode(string)
+        const pointer = allocUint8(buffer.length + 1)
+        const slice = new Uint8Array(
+            memory.buffer,
+            pointer,
+            buffer.length + 1
+        )
+        slice.set(buffer)
+        slice[buffer.length] = 0
+        return pointer
+    }
+    
+    const importObject = {
+        imports: {
+            print: arg => {
+                console.log(arg);
+            }
+        }
+    };
+    
+    const { instance: { exports: {
+        memory, allocUint8, freeUint8, allocSentenceIterator, nextSentenceIterator
+    }}} = await WebAssembly.instantiateStreaming(fetch("zig-out/lib/segmentation-racer.wasm"), importObject);
+
+    function* iterateSentencesZig(text) {
+        const text_pointer = encodeString(text);
+        const text_byte_array = new TextEncoder().encode(text);
+        const sentence_iterator = allocSentenceIterator(text_pointer);
+        const decoder = new TextDecoder();
+        var offset = 0
+        while (true) {
+            const next_offset = nextSentenceIterator(sentence_iterator);
+            if (next_offset == 0 || offset == next_offset) {
+                break;
+            }
+            const sentence = decoder.decode(text_byte_array.slice(offset, next_offset));
+            offset = next_offset;
+            yield sentence;
+        }
+        freeUint8(text_pointer);
+    }
+
+    function* iterateSentencesJS(text) {
+        const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+        for (const sentence of segmenter.segment(text)[Symbol.iterator]()) {
+            yield sentence.segment;
+        }
+    }
+
+    function segment() {
+        let status = document.getElementById("status");
+        console.log("Started...");
+        let table = document.getElementById("output_table");
+        table.innerHTML = "";
+
+        const text = document.getElementById("text_input").value;
+
+        const startZig = performance.now();
+        const sentencesZig = Array.from(iterateSentencesZig(text));
+        const stopZig = performance.now();
+        console.log("Zig done!");
+
+        sentencesZig.forEach(insertTableCell);
+        const headerZig = "<b>Zig: " + sentencesZig.length + " sentences (" + (stopZig - startZig).toFixed(4) + " ms)</b>";
+
+        var headerJS = "<b>JS: <p style='color:red'>Firefox does not support 'Intl.Segmenter'</p></b>";
+        try {
+            const startJS = performance.now();
+            const sentencesJS = Array.from(iterateSentencesJS(text));
+            const stopJS = performance.now();
+            console.log("JS done!");
+
+            sentencesJS.forEach(insertTableCell);
+            headerJS = "<b>JS: " + sentencesJS.length + " sentences (" + (stopJS - startJS).toFixed(4) + " ms)</b>";
+        } catch {}
+        
+        let header = table.createTHead();
+        let row = header.insertRow(0);
+        let cellZig = row.insertCell();
+        cellZig.innerHTML = headerZig;
+        let cellJS = row.insertCell();
+        cellJS.innerHTML = headerJS;
+    }
+    window.segment = segment;
+    </script>
+  </body>
+
+</html>
